@@ -1,22 +1,19 @@
 !
 ! setup.s       (C) 1991 Linus Torvalds
 !
-! setup.s is responsible for getting the system data from the BIOS,
-! and putting them into the appropriate places in system memory.
-! both setup.s and system has been loaded by the bootblock.
+! setup.s负责从BIOS中获取系统数据,并将这些数据放到系统内存的适当地方。
+! 此时setup.s和system已经由bootsect引导块加载到内存中.
 !
-! This code asks the bios for memory/disk/other parameters, and
-! puts them in a "safe" place: 0x90000-0x901FF, ie where the
-! boot-block used to be. It is then up to the protected mode
-! system to read them from there before the area is overwritten
-! for buffer-blocks.
+! 这段代码询问bios有关内存/磁盘/其它参数，并将这些参数放到一个
+! "安全的"地方:0x90000-0x901FF,也即原来 bootsect 代码块曾经在
+! 的地方,然后在被缓冲块覆盖掉之前由保护模式的system读取.
 !
 
-! NOTE! These had better be the same as in bootsect.s!
+! NOTE! 以下这些参数最好和bootsect.s中的相同!
 
-INITSEG  = 0x9000   ! we move boot here - out of the way
-SYSSEG   = 0x1000   ! system loaded at 0x10000 (65536).
-SETUPSEG = 0x9020   ! this is the current segment
+INITSEG  = 0x9000   ! 原来bootsect所处的段.
+SYSSEG   = 0x1000   ! system在0x10000(64k)处.
+SETUPSEG = 0x9020   ! 本程序所在的段地址.
 
 .globl begtext, begdata, begbss, endtext, enddata, endbss
 .text
@@ -30,8 +27,7 @@ begbss:
 entry start
 start:
 
-! ok, the read went well so we get current cursor position and save it for
-! posterity.
+! ok, 整个读磁盘过程都正常，现在将光标位置保存以备今后使用.
 
     mov ax,#INITSEG ! this is done in bootsect already, but...
     mov ds,ax
@@ -58,19 +54,19 @@ start:
     mov ah,#0x12
     mov bl,#0x10
     int 0x10
-    mov [8],ax
-    mov [10],bx
-    mov [12],cx
+    mov [8],ax      ! 0x90008 = ??
+    mov [10],bx     ! 0x9000A = 安装的显示内存,0x9000B = 显示状态(彩色/单色).
+    mov [12],cx     ! 0x9000C = 显示卡特性参数.
 
 ! Get hd0 data
 
     mov ax,#0x0000
     mov ds,ax
-    lds si,[4*0x41]
+    lds si,[4*0x41] ! 取中断向量0x41的值,也即hd0参数表的地址.
     mov ax,#INITSEG
     mov es,ax
-    mov di,#0x0080
-    mov cx,#0x10
+    mov di,#0x0080  ! 传输的目的地址: 0x9000:0x0080.
+    mov cx,#0x10    ! 共传输0x10字节.
     rep
     movsb
 
@@ -78,10 +74,10 @@ start:
 
     mov ax,#0x0000
     mov ds,ax
-    lds si,[4*0x46]
+    lds si,[4*0x46] ! 取中断向量0x46的值,也即hd1参数表的地址.
     mov ax,#INITSEG
     mov es,ax
-    mov di,#0x0090
+    mov di,#0x0090  ! 传输的目的地址: 0x9000:0x0090.
     mov cx,#0x10
     rep
     movsb
@@ -95,7 +91,7 @@ start:
     cmp ah,#3
     je  is_disk1
 no_disk1:
-    mov ax,#INITSEG
+    mov ax,#INITSEG ! 第2个硬盘不存在,则对第2个硬盘表清零.
     mov es,ax
     mov di,#0x0090
     mov cx,#0x10
@@ -115,12 +111,12 @@ is_disk1:
 do_move:
     mov es,ax       ! destination segment
     add ax,#0x1000
-    cmp ax,#0x9000
+    cmp ax,#0x9000  ! 已经把从0x8000段开始的64k代码移动完?
     jz  end_move
     mov ds,ax       ! source segment
     sub di,di
     sub si,si
-    mov cx,#0x8000
+    mov cx,#0x8000  ! 移动0x8000字.
     rep
     movsw
     jmp do_move
@@ -129,19 +125,19 @@ do_move:
 
 end_move:
     mov ax,#SETUPSEG    ! right, forgot this at first. didn't work :-)
-    mov ds,ax
+    mov ds,ax           ! ds指向本程序(setup)段.
     lidt    idt_48      ! load idt with 0,0
     lgdt    gdt_48      ! load gdt with whatever appropriate
 
-! that was painless, now we enable A20
+! 以上的操作很简单,现在我们开启A20地址线.
 
-    call    empty_8042
+    call    empty_8042  ! 等待输入缓冲器空.
     mov al,#0xD1        ! command write
     out #0x64,al
-    call    empty_8042
-    mov al,#0xDF        ! A20 on
+    call    empty_8042  ! 等待输入缓冲器空，看命令是否被接受.
+    mov al,#0xDF        ! 选通A20地址线的参数.
     out #0x60,al
-    call    empty_8042
+    call    empty_8042  ! 输入缓冲器为空,则表示A20线已经选通.
 
 ! well, that went ok, I hope. Now we have to reprogram the interrupts :-(
 ! we put them right after the intel-reserved hardware interrupts, at
@@ -157,26 +153,26 @@ end_move:
     out #0xA0,al        ! and to 8259A-2
     .word   0x00eb,0x00eb
     mov al,#0x20        ! start of hardware int's (0x20)
-    out #0x21,al
+    out #0x21,al        ! 送主芯片ICW2命令字,起始中断号,要送奇地址.
     .word   0x00eb,0x00eb
     mov al,#0x28        ! start of hardware int's 2 (0x28)
-    out #0xA1,al
+    out #0xA1,al        ! 送从芯片ICW2命令字,从芯片的起始中断号.
     .word   0x00eb,0x00eb
     mov al,#0x04        ! 8259-1 is master
-    out #0x21,al
+    out #0x21,al        ! 送主芯片ICW3命令字,主芯片的IR2连从芯片INT.
     .word   0x00eb,0x00eb
     mov al,#0x02        ! 8259-2 is slave
-    out #0xA1,al
+    out #0xA1,al        ! 送从芯片ICW3命令字,表示从芯片的INT连到主芯片的IR2引脚上.
     .word   0x00eb,0x00eb
     mov al,#0x01        ! 8086 mode for both
-    out #0x21,al
+    out #0x21,al        ! 送主芯片ICW4命令字.
     .word   0x00eb,0x00eb
-    out #0xA1,al
+    out #0xA1,al        ! 送从芯片ICW4命令字,内容同上.
     .word   0x00eb,0x00eb
     mov al,#0xFF        ! mask off all interrupts for now
-    out #0x21,al
+    out #0x21,al        ! 屏蔽主芯片所有中断请求.
     .word   0x00eb,0x00eb
-    out #0xA1,al
+    out #0xA1,al        ! 屏蔽从芯片所有中断请求.
 
 ! well, that certainly wasn't fun :-(. Hopefully it works, and we don't
 ! need no steenking BIOS anyway (except for the initial loading :-).
