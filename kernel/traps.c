@@ -18,22 +18,22 @@
 #include <asm/segment.h>
 #include <asm/io.h>
 
-#define get_seg_byte(seg, addr) ({ \
-register char __res; \
-__asm__("push %%fs;mov %%ax,%%fs;movb %%fs:%2,%%al;pop %%fs" \
-	:"=a" (__res):"0" (seg),"m" (*(addr))); \
-__res; })
+#define get_seg_byte(seg, addr) ({                                  \
+    register char __res;                                            \
+    __asm__("push %%fs;mov %%ax,%%fs;movb %%fs:%2,%%al;pop %%fs"    \
+        :"=a" (__res):"0" (seg),"m" (*(addr)));                     \
+    __res; })
 
-#define get_seg_long(seg, addr) ({ \
-register unsigned long __res; \
-__asm__("push %%fs;mov %%ax,%%fs;movl %%fs:%2,%%eax;pop %%fs" \
-	:"=a" (__res):"0" (seg),"m" (*(addr))); \
-__res; })
+#define get_seg_long(seg, addr) ({                                  \
+    register unsigned long __res;                                   \
+    __asm__("push %%fs;mov %%ax,%%fs;movl %%fs:%2,%%eax;pop %%fs"   \
+        :"=a" (__res):"0" (seg),"m" (*(addr)));                     \
+    __res; })
 
-#define _fs() ({ \
-register unsigned short __res; \
-__asm__("mov %%fs,%%ax":"=a" (__res):); \
-__res; })
+#define _fs() ({                                                    \
+    register unsigned short __res;                                  \
+    __asm__("mov %%fs,%%ax":"=a" (__res):);                         \
+    __res; })
 
 int do_exit(long code);
 
