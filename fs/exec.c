@@ -5,16 +5,16 @@
  */
 
 /*
- * #!-checking implemented by tytso.
+ * #!-开始的程序检测部分是由tytso实现的.
  */
 
-/*
- * Demand-loading implemented 01.12.91 - no need to read anything but
- * the header into memory. The inode of the executable is put into
- * "current->executable", and page faults do the actual loading. Clean.
+/**
+ * 需求时加载是于1991.12.1实现的 - 只需将执行文件头部分读进内存而无须
+ * 将整个执行文件都加载进内存。执行文件的inode被放在当前进程的可执行字段中
+ * ("current->executable")，而页异常会进行执行文件的实际加载操作以及清理工作.
  *
- * Once more I can proudly say that linux stood up to being changed: it
- * was less than 2 hours work to get demand-loading completely implemented.
+ * 我可以再一次自豪地说，linux经得起修改：只用了不到2小时的工作时间就完全
+ * 实现了需求加载处理.
  */
 
 #include <errno.h>
@@ -32,17 +32,21 @@ extern int sys_exit(int exit_code);
 extern int sys_close(int fd);
 
 /*
- * MAX_ARG_PAGES defines the number of pages allocated for arguments
- * and envelope for the new program. 32 should suffice, this gives
- * a maximum env+arg of 128kB !
+ * MAX_ARG_PAGES 定义了新程序分配给参数和环境变量使用的内存最大页数。
+ * 32页内存应该足够了，这使得环境和参数(env+arg)空间的总合达到128kB!
  */
 #define MAX_ARG_PAGES           32
 
 /*
- * create_tables() parses the env- and arg-strings in new user
- * memory and creates the pointer tables from them, and puts their
- * addresses on the "stack", returning the new stack pointer value.
+ * create_tables()函数在新用户内存中解析环境变量和参数字符串，由此
+ * 创建指针表，并将它们的地址放到"堆栈"上，然后返回新栈的指针值.
  */
+/**
+ * create_tables - 在新用户堆栈中创建环境和参数变量指针表。
+ * 
+ * 参数：p-以数据段为起点的参数和环境信息偏移指针；argc-参数个数；envc-环境变量数。
+ * 返回：堆栈指针.
+*/
 static unsigned long *create_tables(char *p, int argc, int envc)
 {
     unsigned long *argv, *envp;
@@ -81,8 +85,13 @@ static unsigned long *create_tables(char *p, int argc, int envc)
 }
 
 /*
- * count() counts the number of arguments/envelopes
+ * count()函数计算命令行参数/环境变量的个数.
  */
+/**
+ * count - 计算参数个数。
+ * 参数：argv - 参数指针数组，最后一个指针项是NULL.
+ * 返回：参数个数.
+*/
 static int count(char **argv)
 {
     int i = 0;
@@ -95,22 +104,34 @@ static int count(char **argv)
     return i;
 }
 
-/*
- * 'copy_string()' copies argument/envelope strings from user
- * memory to free pages in kernel mem. These are in a format ready
- * to be put directly into the top of new user memory.
+/**
+ * 'copy_string()'函数从用户内存空间拷贝参数和环境字符串到内核空闲页面内存中。
+ * 这些已具有直接放到新用户内存中的格式.
  *
- * Modified by TYT, 11/24/91 to add the from_kmem argument, which specifies
- * whether the string and the string array are from user or kernel segments:
+ * 由TYT(Tytso)于1991.12.24日修改，增加了from_kmem参数，该参数指明了字符串或
+ * 字符串数组是来自用户段还是内核段:
  *
  * from_kmem     argv *        argv **
  *    0          user space    user space
  *    1          kernel space  user space
  *    2          kernel space  kernel space
  *
- * We do this by playing games with the fs segment register.  Since it
- * it is expensive to load a segment register, we try to avoid calling
- * set_fs() unless we absolutely have to.
+ * 我们是通过巧妙处理fs段寄存器来操作的。由于加载一个段寄存器代价太大，所以
+ * 我们尽量避免调用set_fs()，除非实在必要.
+ */
+/**
+ * copy_strings - 复制指定个数的参数字符串到参数和环境空间.
+ * 
+ * 参数：
+ * argc - 欲添加的参数个数；
+ * argv - 参数指针数组；
+ * page - 参数和环境空间页面指针数组。
+ * 
+ * p-在参数表空间中的偏移指针，始终指向已复制串的头部；from_kmem-字符串来源标志。
+ * 在do_execve()函数中，p初始化为指向参数表(128kB)空间的最后一个长字处，参数字符
+ * 串是以堆栈操作方式逆向往其中复制存放的，因此p指针会始终指向参数字符串的头部。
+ * 
+ * 返回：参数和环境空间当前头部指针.
  */
 static unsigned long copy_strings(int argc, char **argv, unsigned long *page,
                                   unsigned long p, int from_kmem)
@@ -183,38 +204,78 @@ static unsigned long copy_strings(int argc, char **argv, unsigned long *page,
     return p;
 }
 
+/**
+ * 修改局部描述符表中的描述符基址和段限长，并将参数和环境空间页面放置在数据段末端。
+ * 
+ * 参数：
+ * text_size - 执行文件头部中a_text字段给出的代码段长度值；
+ * page - 参数和环境空间页面指针数组.
+ * 
+ * 返回：数据段限长值(64MB).
+ */
 static unsigned long change_ldt(unsigned long text_size, unsigned long *page)
 {
     unsigned long code_limit, data_limit, code_base, data_base;
     int i;
 
+    /**
+     * 根据执行文件头部a_text值，计算以页面长度为边界的代码段限长。
+     * 并设置数据段长度为64MB.
+     */
     code_limit = text_size + PAGE_SIZE - 1;
     code_limit &= 0xFFFFF000;
     data_limit = 0x4000000;
+
+    /* 取当前进程中局部描述符表代码段描述符中代码段基址，代码段基址与数据段基址相同. */
     code_base = get_base(current->ldt[1]);
     data_base = code_base;
+
+    /* 重新设置局部表中代码段和数据段描述符的基址和段限长. */
     set_base(current->ldt[1], code_base);
     set_limit(current->ldt[1], code_limit);
     set_base(current->ldt[2], data_base);
     set_limit(current->ldt[2], data_limit);
 
-    /* make sure fs points to the NEW data segment */
+    /* 要确信fs段寄存器已指向新的数据段. */
+    /* fs段寄存器中放入局部表数据段描述符的选择符(0x17). */
     __asm__("pushl $0x17\n\tpop %%fs" ::);
 
+    /**
+     * 将参数和环境空间已存放数据的页面(共可有MAX_ARG_PAGES页，128kB)放到
+     * 数据段线性地址的末端。是调用函数put_page()进行操作的(mm/memory.c).
+     */
     data_base += data_limit;
 
     for (i = MAX_ARG_PAGES - 1; i >= 0; i--)
     {
         data_base -= PAGE_SIZE;
+
+        /* 如果该页面存在. */
         if (page[i])
+            /* 就放置该页面. */
             put_page(page[i], data_base);
     }
 
+    /* 最后返回数据段限长(64MB). */
     return data_limit;
 }
 
 /*
- * 'do_execve()' executes a new program.
+ * 'do_execve()'函数执行一个新程序.
+ */
+/**
+ * do_execve - 系统中断调用函数。加载并执行子进程(其它程序).
+ * 该函数系统中断调用(int 0x80)功能号__NR_execve 调用的函数。
+ * 
+ * 参数：
+ * eip - 指向堆栈中调用系统中断的程序代码指针eip处，参见
+ * kernel/system_call.s程序开始部分的说明；
+ * tmp - 系统中断调用本函数时的返回地址，无用；
+ * filename - 被执行程序文件名；
+ * argv - 命令行参数指针数组；
+ * envp - 环境变量指针数组。
+ * 
+ * 返回：如果调用成功，则不返回；否则设置出错号，并返回-1.
  */
 int do_execve(unsigned long *eip, long tmp, char *filename,
               char **argv, char **envp)
