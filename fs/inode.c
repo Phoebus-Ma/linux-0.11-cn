@@ -12,6 +12,7 @@
 #include <linux/mm.h>
 #include <asm/system.h>
 
+/* 内存中inode表(NR_INODE=32项). */
 struct m_inode inode_table[NR_INODE] = {
     {
         0,
@@ -21,6 +22,11 @@ struct m_inode inode_table[NR_INODE] = {
 static void read_inode(struct m_inode *inode);
 static void write_inode(struct m_inode *inode);
 
+/**
+ * wait_on_inode - 等待指定的inode可用.
+ * 
+ * 如果inode已被锁定，则将当前任务置为不可中断的等待状态。直到该inode解锁.
+ */
 static inline void wait_on_inode(struct m_inode *inode)
 {
     cli();
@@ -31,6 +37,12 @@ static inline void wait_on_inode(struct m_inode *inode)
     sti();
 }
 
+/**
+ * lock_inode - 对指定的inode上锁(锁定指定的inode).
+ * 
+ * 如果inode已被锁定，则将当前任务置为不可中断的等待状态。直到该inode解锁，
+ * 然后对其上锁.
+ */
 static inline void lock_inode(struct m_inode *inode)
 {
     cli();
@@ -43,12 +55,22 @@ static inline void lock_inode(struct m_inode *inode)
     sti();
 }
 
+/**
+ * unlock_inode - 对指定的inode解锁.
+ * 
+ * 复位inode的锁定标志，并明确地唤醒等待此inode的进程.
+ */
 static inline void unlock_inode(struct m_inode *inode)
 {
     inode->i_lock = 0;
     wake_up(&inode->i_wait);
 }
 
+/**
+ * invalidate_inodes - 释放内存中设备dev的所有inode.
+ * 
+ * 扫描内存中的inode表数组，如果是指定设备使用的inode就释放之.
+ */
 void invalidate_inodes(int dev)
 {
     int i;
@@ -70,6 +92,11 @@ void invalidate_inodes(int dev)
     }
 }
 
+/**
+ * sync_inodes - 同步所有inode.
+ * 
+ * 同步内存与设备上的所有inode信息.
+ */
 void sync_inodes(void)
 {
     int i;
@@ -85,6 +112,17 @@ void sync_inodes(void)
     }
 }
 
+/**
+ * _bmap - 文件数据块映射到盘块的处理操作.
+ * 
+ * 参数：
+ * inode – 文件的inode；
+ * block – 文件中的数据块号；
+ * create - 创建标志。
+ * 
+ * 如果创建标志置位，则在对应逻辑块不存在时就申请新磁盘块。
+ * 返回block数据块对应在设备上的逻辑块号(盘块号).
+ */
 static int _bmap(struct m_inode *inode, int block, int create)
 {
     struct buffer_head *bh;
@@ -185,16 +223,26 @@ static int _bmap(struct m_inode *inode, int block, int create)
     return i;
 }
 
+/**
+ * bmap - 根据inode信息取文件数据块block在设备上对应的逻辑块号.
+ */
 int bmap(struct m_inode *inode, int block)
 {
     return _bmap(inode, block, 0);
 }
 
+/**
+ * create_block - 创建文件数据块block在设备上对应的逻辑块，
+ * 并返回设备上对应的逻辑块号.
+ */
 int create_block(struct m_inode *inode, int block)
 {
     return _bmap(inode, block, 1);
 }
 
+/**
+ * iput - 释放一个inode(回写入设备).
+ */
 void iput(struct m_inode *inode)
 {
     if (!inode)
@@ -255,6 +303,10 @@ repeat:
     return;
 }
 
+/**
+ * get_empty_inode - 从inode表(inode_table)中获取一个空闲inode项.
+ * 寻找引用计数count为0的inode，并将其写盘后清零，返回其指针.
+ */
 struct m_inode *get_empty_inode(void)
 {
     struct m_inode *inode;
@@ -303,6 +355,13 @@ struct m_inode *get_empty_inode(void)
     return inode;
 }
 
+/**
+ * get_pipe_inode - 获取管道节点。返回为inode指针(如果是NULL则失败).
+ * 
+ * 首先扫描inode表，寻找一个空闲inode项，然后取得一页空闲内存供管道使用。
+ * 然后将得到的inode的引用计数置为2(读者和写者)，初始化管道头和尾，置inode
+ * 的管道类型表示.
+ */
 struct m_inode *get_pipe_inode(void)
 {
     struct m_inode *inode;
@@ -323,6 +382,10 @@ struct m_inode *get_pipe_inode(void)
     return inode;
 }
 
+/**
+ * iget - 从设备上读取指定节点号的inode.
+ * nr - inode号.
+ */
 struct m_inode *iget(int dev, int nr)
 {
     struct m_inode *inode, *empty;
@@ -393,6 +456,9 @@ struct m_inode *iget(int dev, int nr)
     return inode;
 }
 
+/**
+ * read_inode - 从设备上读取指定inode的信息到内存中(缓冲区中).
+ */
 static void read_inode(struct m_inode *inode)
 {
     struct super_block *sb;
@@ -418,6 +484,9 @@ static void read_inode(struct m_inode *inode)
     unlock_inode(inode);
 }
 
+/**
+ * write_inode - 将指定inode信息写入设备(写入缓冲区相应的缓冲块中，待缓冲区刷新时会写入盘中).
+ */
 static void write_inode(struct m_inode *inode)
 {
     struct super_block *sb;
