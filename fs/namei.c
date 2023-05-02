@@ -18,24 +18,32 @@
 #include <const.h>
 #include <sys/stat.h>
 
+/**
+ * 访问模式宏。x是include/fcntl.h第7行开始定义的文件访问标志。
+ * 根据x值索引对应数值(数值表示rwx权限: r, w, rw, wxrwxrwx)(8进制).
+ */
 #define ACC_MODE(x)             ("\004\002\006\377"[(x)&O_ACCMODE])
 
-/*
- * comment out this line if you want names > NAME_LEN chars to be
- * truncated. Else they will be disallowed.
+/**
+ * 如果想让文件名长度 > NAME_LEN的字符被截掉，就将下面定义注释掉.
  */
 /* #define NO_TRUNCATE */
 
-#define MAY_EXEC                1
-#define MAY_WRITE               2
-#define MAY_READ                4
+#define MAY_EXEC                1       /* 可执行(可进入). */
+#define MAY_WRITE               2       /* 可写. */
+#define MAY_READ                4       /* 可读. */
 
-/*
- *	permission()
+/**
+ * permission()
  *
- * is used to check for read/write/execute permissions on a file.
- * I don't know if we should look at just the euid or both euid and
- * uid, but that should be easily changed.
+ * 该函数用于检测一个文件的读/写/执行权限。我不知道是否只需检查euid，还是
+ * 需要检查euid和uid两者，不过这很容易修改.
+ */
+/**
+ * permission - 检测文件访问许可权限。
+ * 
+ * 参数：inode - 文件对应的 i 节点；mask - 访问属性屏蔽码。
+ * 返回：访问许可返回1，否则返回0.
  */
 static int permission(struct m_inode *inode, int mask)
 {
@@ -55,12 +63,18 @@ static int permission(struct m_inode *inode, int mask)
     return 0;
 }
 
-/*
- * ok, we cannot use strncmp, as the name is not in our data space.
- * Thus we'll have to use match. No big problem. Match also makes
- * some sanity tests.
+/**
+ * ok, 我们不能使用strncmp字符串比较函数，因为名称不在我们的数据空间
+ * (不在内核空间)。
+ * 因而我们只能使用match()。问题不大。match()同样也处理一些完整的测试.
  *
- * NOTE! unlike strncmp, match returns 1 for success, 0 for failure.
+ * 注意！与strncmp不同的是match()成功时返回1，失败时返回0.
+ */
+/**
+ * match - 指定长度字符串比较函数。
+ * 
+ * 参数：len - 比较的字符串长度；name - 文件名指针；de - 目录项结构。
+ * 返回：相同返回1，不同返回0.
  */
 static int match(int len, const char *name, struct dir_entry *de)
 {
@@ -82,16 +96,21 @@ static int match(int len, const char *name, struct dir_entry *de)
     return same;
 }
 
-/*
- *	find_entry()
+/**
+ * find_entry()
  *
- * finds an entry in the specified directory with the wanted name. It
- * returns the cache buffer in which the entry was found, and the entry
- * itself (as a parameter - res_dir). It does NOT read the inode of the
- * entry - you'll have to do that yourself if you want to.
+ * 在指定的目录中寻找一个与名字匹配的目录项。返回一个含有找到目录项的高速
+ * 缓冲区以及目录项本身(作为一个参数-res_dir)。并不读目录项的inode - 如
+ * 果需要的话需自己操作.
  *
- * This also takes care of the few special cases due to '..'-traversal
- * over a pseudo-root and a mount point.
+ * '..'目录项，操作期间也会对几种特殊情况分别处理 - 比如横越一个伪根目录以
+ * 及安装点.
+ */
+/**
+ * find_entry - 查找指定目录和文件名的目录项。
+ * 
+ * 参数：dir - 指定目录 i 节点的指针；name - 文件名；namelen - 文件名长度；
+ * 返回：高速缓冲区指针；res_dir - 返回的目录项结构指针.
  */
 static struct buffer_head *find_entry(struct m_inode **dir,
                                       const char *name, int namelen, struct dir_entry **res_dir)
@@ -178,15 +197,21 @@ static struct buffer_head *find_entry(struct m_inode **dir,
     return NULL;
 }
 
-/*
- *	add_entry()
+/**
+ * add_entry()
  *
- * adds a file entry to the specified directory, using the same
- * semantics as find_entry(). It returns NULL if it failed.
+ * 使用与find_entry()同样的方法，往指定目录中添加一文件目录项。
+ * 如果失败则返回 NULL.
  *
- * NOTE!! The inode part of 'de' is left at 0 - which means you
- * may not sleep between calling this and putting something into
- * the entry, as someone else might have used it while you slept.
+ * 注意！！'de'(指定目录项结构指针)的inode部分被设置为0 - 这表示
+ * 在调用该函数和往目录项中添加信息之间不能睡眠，因为若睡眠那么其它
+ * 人(进程)可能会已经使用了该目录项.
+ */
+/**
+ * add_entry - 根据指定的目录和文件名添加目录项。
+ * 
+ * 参数：dir - 指定目录的 i 节点；name - 文件名；namelen - 文件名长度；
+ * 返回：高速缓冲区指针；res_dir - 返回的目录项结构指针.
  */
 static struct buffer_head *add_entry(struct m_inode *dir,
                                      const char *name, int namelen, struct dir_entry **res_dir)
@@ -267,11 +292,17 @@ static struct buffer_head *add_entry(struct m_inode *dir,
     return NULL;
 }
 
-/*
- *	get_dir()
+/**
+ * get_dir()
  *
- * Getdir traverses the pathname until it hits the topmost directory.
- * It returns NULL on failure.
+ * 该函数根据给出的路径名进行搜索，直到达到最顶端的目录。
+ * 如果失败则返回NULL.
+ */
+/**
+ * get_dir - 搜寻指定路径名的目录。
+ * 
+ * 参数：pathname - 路径名。
+ * 返回：目录的inode指针。失败时返回NULL.
  */
 static struct m_inode *get_dir(const char *pathname)
 {
@@ -332,11 +363,13 @@ static struct m_inode *get_dir(const char *pathname)
     }
 }
 
-/*
- *	dir_namei()
+/**
+ * dir_namei()
  *
- * dir_namei() returns the inode of the directory of the
- * specified name, and the name within that directory.
+ * dir_namei()函数返回指定目录名的inode指针，以及在最顶层目录的名称.
+ * 
+ * 参数：pathname - 目录路径名；namelen - 路径名长度。
+ * 返回：指定目录名最顶层目录的inode指针和最顶层目录名及其长度.
  */
 static struct m_inode *dir_namei(const char *pathname,
                                  int *namelen, const char **name)
@@ -360,12 +393,17 @@ static struct m_inode *dir_namei(const char *pathname,
     return dir;
 }
 
-/*
- *	namei()
+/**
+ * namei()
  *
- * is used by most simple commands to get the inode of a specified name.
- * Open, link etc use their own routines, but this is enough for things
- * like 'chmod' etc.
+ * 该函数被许多简单的命令用于取得指定路径名称的inode。open、link等则使用它们
+ * 自己的相应函数，但对于象修改模式'chmod'等这样的命令，该函数已足够用了.
+ */
+/**
+ * namei - 取指定路径名的inode。
+ * 
+ * 参数：pathname - 路径名。
+ * 返回：对应的inode.
  */
 struct m_inode *namei(const char *pathname)
 {
@@ -406,10 +444,16 @@ struct m_inode *namei(const char *pathname)
     return dir;
 }
 
-/*
- *	open_namei()
+/**
+ * open_namei()
  *
- * namei for open - this is in fact almost the whole open-routine.
+ * open()所使用的namei函数 - 这其实几乎是完整的打开文件程序.
+ */
+/**
+ * open_namei - 文件打开namei函数。
+ * 
+ * 参数：pathname - 文件路径名；flag - 文件打开标志；mode - 文件访问许可属性；
+ * 返回：成功返回0，否则返回出错码；res_inode - 返回的对应文件路径名的的inode指针.
  */
 int open_namei(const char *pathname, int flag, int mode,
                struct m_inode **res_inode)
@@ -520,6 +564,18 @@ int open_namei(const char *pathname, int flag, int mode,
     return 0;
 }
 
+/**
+ * sys_mknod - 创建一个特殊文件或普通文件节点(node)。
+ * 创建名称为filename，由mode和dev指定的文件系统节点(普通文件、
+ * 设备特殊文件或命名管道)。
+ * 
+ * 参数：
+ * filename - 路径名；
+ * mode - 指定使用许可以及所创建节点的类型；
+ * dev - 设备号。
+ * 
+ * 返回：成功则返回 0，否则返回出错码.
+ */
 int sys_mknod(const char *filename, int mode, int dev)
 {
     const char *basename;
@@ -589,6 +645,12 @@ int sys_mknod(const char *filename, int mode, int dev)
     return 0;
 }
 
+/**
+ * sys_mkdir - 创建目录。
+ * 
+ * 参数：pathname - 路径名；mode - 目录使用的权限属性。
+ * 返回：成功则返回 0，否则返回出错码.
+ */
 int sys_mkdir(const char *pathname, int mode)
 {
     const char *basename;
@@ -689,8 +751,14 @@ int sys_mkdir(const char *pathname, int mode)
     return 0;
 }
 
-/*
- * routine to check that the specified directory is empty (for rmdir)
+/**
+ * 用于检查指定的目录是否为空的子程序(用于rmdir系统调用函数).
+ */
+/**
+ * empty_dir - 检查指定目录是否是空的。
+ * 
+ * 参数：inode - 指定目录的 i 节点指针。
+ * 返回：0 - 是空的；1 - 不空.
  */
 static int empty_dir(struct m_inode *inode)
 {
@@ -754,6 +822,12 @@ static int empty_dir(struct m_inode *inode)
     return 1;
 }
 
+/**
+ * sys_rmdir - 删除指定名称的目录。
+ * 
+ * 参数： name - 目录名(路径名)。
+ * 返回：返回 0 表示成功，否则返回出错号。
+ */
 int sys_rmdir(const char *name)
 {
     const char *basename;
@@ -853,6 +927,15 @@ int sys_rmdir(const char *name)
     return 0;
 }
 
+/**
+ * sys_unlink - 删除文件名以及可能也删除其相关的文件。
+ * 
+ * 从文件系统删除一个名字。如果是一个文件的最后一个连接，并且没有进程正打开
+ * 该文件，则该文件也将被删除，并释放所占用的设备空间。
+ * 
+ * 参数：name - 文件名。
+ * 返回：成功则返回0，否则返回出错号.
+ */
 int sys_unlink(const char *name)
 {
     const char *basename;
@@ -928,6 +1011,13 @@ int sys_unlink(const char *name)
     return 0;
 }
 
+/**
+ * sys_link - 为文件建立一个文件名。
+ * 
+ * 为一个已经存在的文件创建一个新连接(也称为硬连接 - hard link)。
+ * 参数：oldname - 原路径名；newname - 新的路径名。
+ * 返回：若成功则返回0，否则返回出错号.
+ */
 int sys_link(const char *oldname, const char *newname)
 {
     struct dir_entry *de;
