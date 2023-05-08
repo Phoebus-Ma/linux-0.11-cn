@@ -7,23 +7,22 @@
 /*
  *	console.c
  *
- * This module implements the console io functions
- *	'void con_init(void)'
- *	'void con_write(struct tty_queue * queue)'
- * Hopefully this will be a rather complete VT102 implementation.
+ * 该模块实现控制台输入输出功能:
+ *  'void con_init(void)'
+ *  'void con_write(struct tty_queue * queue)'
+ * 希望这是一个非常完整的VT102实现.
  *
  * Beeping thanks to John T Kohl.
  */
 
 /*
- *  NOTE!!! We sometimes disable and enable interrupts for a short while
- * (to put a word in video IO), but this will work even for keyboard
- * interrupts. We know interrupts aren't enabled when getting a keyboard
- * interrupt, as we use trap-gates. Hopefully all is well.
+ * 注意!!! 我们有时短暂地禁止和允许中断(在将一个字(word)放到视频IO)，但即使
+ * 对于键盘中断这也是可以工作的。因为我们使用陷阱门，所以我们知道在获得一个
+ * 键盘中断时中断是不允许的。希望一切均正常.
  */
 
 /*
- * Code to check for different video-cards mostly by Galen Hunt,
+ * 检测不同显示卡的代码大多数是Galen Hunt编写的,
  * <g-hunt@ee.utah.edu>
  */
 
@@ -33,122 +32,201 @@
 #include <asm/system.h>
 
 /*
- * These are set up by the setup-routine at boot-time:
+ * 这些是设置子程序setup在引导启动系统时设置的参数:
  */
-
-#define ORIG_X                  (*(unsigned char *)0x90000)
-#define ORIG_Y                  (*(unsigned char *)0x90001)
-#define ORIG_VIDEO_PAGE         (*(unsigned short *)0x90004)
-#define ORIG_VIDEO_MODE         ((*(unsigned short *)0x90006) & 0xff)
-#define ORIG_VIDEO_COLS         (((*(unsigned short *)0x90006) & 0xff00) >> 8)
-#define ORIG_VIDEO_LINES        (25)
+/* 参见对boot/setup.s的注释，和setup程序读取并保留的参数表. */
+#define ORIG_X                  (*(unsigned char *)0x90000)     /* 光标列号. */
+#define ORIG_Y                  (*(unsigned char *)0x90001)     /* 光标行号. */
+#define ORIG_VIDEO_PAGE         (*(unsigned short *)0x90004)    /* 显示页面. */
+#define ORIG_VIDEO_MODE         ((*(unsigned short *)0x90006) & 0xff) /* 显示模式. */
+#define ORIG_VIDEO_COLS         (((*(unsigned short *)0x90006) & 0xff00) >> 8) /* 字符列数. */
+#define ORIG_VIDEO_LINES        (25)                            /* 显示行数. */
 #define ORIG_VIDEO_EGA_AX       (*(unsigned short *)0x90008)
-#define ORIG_VIDEO_EGA_BX       (*(unsigned short *)0x9000a)
-#define ORIG_VIDEO_EGA_CX       (*(unsigned short *)0x9000c)
+#define ORIG_VIDEO_EGA_BX       (*(unsigned short *)0x9000a)    /* 显示内存大小和色彩模式. */
+#define ORIG_VIDEO_EGA_CX       (*(unsigned short *)0x9000c)    /* 显示卡特性参数. */
 
-#define VIDEO_TYPE_MDA          0x10    /* Monochrome Text Display	*/
-#define VIDEO_TYPE_CGA          0x11    /* CGA Display 			*/
-#define VIDEO_TYPE_EGAM         0x20    /* EGA/VGA in Monochrome Mode	*/
-#define VIDEO_TYPE_EGAC         0x21    /* EGA/VGA in Color Mode	*/
+#define VIDEO_TYPE_MDA          0x10    /* 单色文本. */
+#define VIDEO_TYPE_CGA          0x11    /* CGA显示器. */
+#define VIDEO_TYPE_EGAM         0x20    /* EGA/VGA单色. */
+#define VIDEO_TYPE_EGAC         0x21    /* EGA/VGA彩色. */
 
 #define NPAR                    16
 
 extern void keyboard_interrupt(void);
 
-static unsigned char video_type;        /* Type of display being used	*/
-static unsigned long video_num_columns; /* Number of text columns	*/
-static unsigned long video_size_row;    /* Bytes per row		*/
-static unsigned long video_num_lines;   /* Number of test lines		*/
-static unsigned char video_page;        /* Initial video page		*/
-static unsigned long video_mem_start;   /* Start of video RAM		*/
-static unsigned long video_mem_end;     /* End of video RAM (sort of)	*/
-static unsigned short video_port_reg;   /* Video register select port	*/
-static unsigned short video_port_val;   /* Video register value port	*/
-static unsigned short video_erase_char; /* Char+Attrib to erase with	*/
+static unsigned char video_type;        /* 使用的显示类型. */
+static unsigned long video_num_columns; /* 屏幕文本列数. */
+static unsigned long video_size_row;    /* 每行使用的字节数. */
+static unsigned long video_num_lines;   /* 屏幕文本行数. */
+static unsigned char video_page;        /* 初始显示页面. */
+static unsigned long video_mem_start;   /* 显示内存起始地址. */
+static unsigned long video_mem_end;     /* 显示内存结束(末端)地址. */
+static unsigned short video_port_reg;   /* 显示控制索引寄存器端口. */
+static unsigned short video_port_val;   /* 显示控制数据寄存器端口. */
+static unsigned short video_erase_char; /* 擦除字符属性与字符(0x0720). */
 
-static unsigned long origin;  /* Used for EGA/VGA fast scroll	*/
-static unsigned long scr_end; /* Used for EGA/VGA fast scroll	*/
-static unsigned long pos;
-static unsigned long x, y;
-static unsigned long top, bottom;
-static unsigned long state = 0;
-static unsigned long npar, par[NPAR];
+/* 以下这些变量用于屏幕卷屏操作. */
+static unsigned long origin;            /* 用于EGA/VGA快速滚屏(滚屏起始内存地址). */
+static unsigned long scr_end;           /* 用于EGA/VGA快速滚屏(滚屏末端内存地址). */
+static unsigned long pos;               /* 当前光标对应的显示内存位置. */
+static unsigned long x, y;              /* 当前光标位置. */
+static unsigned long top, bottom;       /* 滚动时顶行行号；底行行号. */
+/* state用于标明处理ESC转义序列时的当前步骤。npar,par[]用于存放ESC序列的中间处理参数. */
+static unsigned long state = 0;         /* ANSI转义字符序列处理状态. */
+static unsigned long npar, par[NPAR];   /* ANSI转义字符序列参数个数和参数数组. */
 static unsigned long ques = 0;
-static unsigned char attr = 0x07;
+static unsigned char attr = 0x07;       /* 字符属性(黑底白字). */
 
+/* 系统蜂鸣函数. */
 static void sysbeep(void);
 
 /*
- * this is what the terminal answers to a ESC-Z or csi0c
- * query (= vt100 response).
+ * 下面是终端回应ESC-Z或csi0c请求的应答(=vt100响应).
  */
+/* csi - 控制序列引导码(Control Sequence Introducer). */
 #define RESPONSE                "\033[?1;2c"
 
-/* NOTE! gotoxy thinks x==video_num_columns is ok */
+/* 注意！gotoxy函数认为x==video_num_columns，这是正确的. */
+/**
+ * gotoxy - 跟踪光标当前位置.
+ * 
+ * 参数：new_x - 光标所在列号；new_y - 光标所在行号。
+ * 更新当前光标位置变量x,y，并修正pos指向光标在显示内存中的对应位置.
+ */
 static inline void gotoxy(unsigned int new_x, unsigned int new_y)
 {
+    /**
+     * 如果输入的光标行号超出显示器列数，或者光标行号超出显示的最大行数，
+     * 则退出.
+     */
     if (new_x > video_num_columns || new_y >= video_num_lines)
         return;
 
+    /* 更新当前光标变量；更新光标位置对应的在显示内存中位置变量pos. */
     x = new_x;
     y = new_y;
     pos = origin + y * video_size_row + (x << 1);
 }
 
+/**
+ * set_origin - 设置滚屏起始显示内存地址.
+ */
 static inline void set_origin(void)
 {
     cli();
+
+    /**
+     * 首先选择显示控制数据寄存器r12，然后写入卷屏起始地址高字节。向右移动
+     * 9位，表示向右移动8位，再除以2(2字节代表屏幕上1字符)。是相对于默认
+     * 显示内存操作的。
+     */
     outb_p(12, video_port_reg);
     outb_p(0xff & ((origin - video_mem_start) >> 9), video_port_val);
+
+    /**
+     * 再选择显示控制数据寄存器r13，然后写入卷屏起始地址底字节。向右移动
+     * 1位表示除以2.
+     */
     outb_p(13, video_port_reg);
     outb_p(0xff & ((origin - video_mem_start) >> 1), video_port_val);
+
     sti();
 }
 
+/**
+ * scrup - 向上卷动一行(屏幕窗口向下移动).
+ *
+ * 将屏幕窗口向下移动一行.
+ */
 static void scrup(void)
 {
+    /* 如果显示类型是EGA，则执行以下操作. */
     if (video_type == VIDEO_TYPE_EGAC || video_type == VIDEO_TYPE_EGAM)
     {
+        /**
+         * 如果移动起始行top=0，移动最底行 bottom=video_num_lines=25，
+         * 则表示整屏窗口向下移动。
+         */
         if (!top && bottom == video_num_lines)
         {
+            /**
+             * 调整屏幕显示对应内存的起始位置指针origin为向下移一行屏幕字符
+             * 对应的内存位置，同时也调整当前光标对应的内存位置以及屏幕末行
+             * 末端字符指针scr_end的位置.
+             */
             origin += video_size_row;
             pos += video_size_row;
             scr_end += video_size_row;
 
+            /**
+             * 如果屏幕末端最后一个显示字符所对应的显示内存指针scr_end超出了
+             * 实际显示内存的末端，则将屏幕内容内存数据移动到显示内存的起始位置
+             * video_mem_start处，并在出现的新行上填入空格字符.
+             */
             if (scr_end > video_mem_end)
             {
-                __asm__("cld\n\t"
-                        "rep\n\t"
-                        "movsl\n\t"
-                        "movl _video_num_columns,%1\n\t"
-                        "rep\n\t"
+                /**
+                 * %0 - eax(擦除字符+属性)；
+                 * %1 - ecx((显示器字符行数-1)所对应的字符数/2，是以长字移动)；
+                 * %2 - edi(显示内存起始位置 video_mem_start)；
+                 * %3 - esi(屏幕内容对应的内存起始位置origin).
+                 * 移动方向：[edi]??[esi]，移动 ecx 个长字.
+                 */
+                __asm__("cld\n\t"       /* 清方向位. */
+                        "rep\n\t"       /* 重复操作，将当前屏幕内存数据. */
+                        "movsl\n\t"     /* 移动到显示内存起始处. */
+                        "movl _video_num_columns,%1\n\t" /* ecx=1行字符数. */
+                        "rep\n\t"       /* 在新行上填入空格字符. */
                         "stosw" ::"a"(video_erase_char),
                         "c"((video_num_lines - 1) * video_num_columns >> 1),
                         "D"(video_mem_start),
                         "S"(origin)
                         : "cx", "di", "si");
+
+                /**
+                 * 根据屏幕内存数据移动后的情况，重新调整当前屏幕对应内存的起始指针、
+                 * 光标位置指针和屏幕末端对应内存指针scr_end.
+                 */
                 scr_end -= origin - video_mem_start;
                 pos -= origin - video_mem_start;
                 origin = video_mem_start;
             }
+            /**
+             * 如果调整后的屏幕末端对应的内存指针scr_end没有超出显示内存的末端video_mem_end，
+             * 则只需在新行上填入擦除字符(空格字符).
+             * %0 - eax(擦除字符+属性)；
+             * %1 - ecx(显示器字符行数)；
+             * %2 - edi(屏幕对应内存最后一行开始处)；
+             */
             else
             {
-                __asm__("cld\n\t"
-                        "rep\n\t"
-                        "stosw" ::"a"(video_erase_char),
+                __asm__("cld\n\t"       /* 清方向位. */
+                        "rep\n\t"       /* 重复操作，在新出现行上. */
+                        "stosw" ::"a"(video_erase_char), /* 填入擦除字符(空格字符). */
                         "c"(video_num_columns),
                         "D"(scr_end - video_size_row)
                         : "cx", "di");
             }
+
+            /* 向显示控制器中写入新的屏幕内容对应的内存起始位置值. */
             set_origin();
         }
+        /**
+         * 否则表示不是整屏移动。也即表示从指定行top开始的所有行向上移动1行(删除1行)。
+         * 此时直接将屏幕从指定行top到屏幕末端所有行对应的显示内存数据向上移动1行，
+         * 并在新出现的行上填入擦除字符。
+         * %0-eax(擦除字符+属性)；
+         * %1-ecx(top 行下 1 行开始到屏幕末行的行数所对应的内存长字数)；
+         * %2-edi(top 行所处的内存位置)；
+         * %3-esi(top+1 行所处的内存位置).
+         */
         else
         {
-            __asm__("cld\n\t"
-                    "rep\n\t"
-                    "movsl\n\t"
-                    "movl _video_num_columns,%%ecx\n\t"
-                    "rep\n\t"
+            __asm__("cld\n\t"           /* 清方向位. */
+                    "rep\n\t"           /* 循环操作，将top+1到bottom行. */
+                    "movsl\n\t"         /* 所对应的内存块移到top行开始处. */
+                    "movl _video_num_columns,%%ecx\n\t" /* ecx = 1行字符数. */
+                    "rep\n\t"           /* 在新行上填入擦除字符. */
                     "stosw" ::"a"(video_erase_char),
                     "c"((bottom - top - 1) * video_num_columns >> 1),
                     "D"(origin + video_size_row * top),
@@ -156,6 +234,11 @@ static void scrup(void)
                     : "cx", "di", "si");
         }
     }
+    /**
+     * 如果显示类型不是EGA(是MDA)，则执行下面移动操作。因为MDA显示控制卡会自动调整
+     * 超出显示范围的情况，也即会自动翻卷指针，所以这里不对屏幕内容对应内存超出显示
+     * 内存的情况单独处理。处理方法与EGA非整屏移动情况完全一样.
+     */
     else /* Not EGA/VGA */
     {
         __asm__("cld\n\t"
@@ -171,6 +254,14 @@ static void scrup(void)
     }
 }
 
+/**
+ * scrdown - 向下卷动一行(屏幕窗口向上移动).
+ * 
+ * 将屏幕窗口向上移动一行，屏幕显示的内容向下移动1行，在被移动开始行的
+ * 上方出现一新行。处理方法与scrup()相似，只是为了在移动显示内存数据时
+ * 不出现数据覆盖错误情况，复制是以反方向进行的，也即从屏幕倒数第2行的
+ * 最后一个字符开始复制.
+ */
 static void scrdown(void)
 {
     if (video_type == VIDEO_TYPE_EGAC || video_type == VIDEO_TYPE_EGAM)
@@ -203,6 +294,9 @@ static void scrdown(void)
     }
 }
 
+/**
+ * lf - 光标位置下移一行(lf - line feed换行).
+ */
 static void lf(void)
 {
     if (y + 1 < bottom)
@@ -215,6 +309,9 @@ static void lf(void)
     scrup();
 }
 
+/**
+ * ri - 光标上移一行(ri - reverse line feed反向换行).
+ */
 static void ri(void)
 {
     if (y > top)
@@ -227,12 +324,18 @@ static void ri(void)
     scrdown();
 }
 
+/**
+ * cr - 光标回到第1列(0列)左端(cr - carriage return回车).
+ */
 static void cr(void)
 {
     pos -= x << 1;
     x = 0;
 }
 
+/**
+ * del - 擦除光标前一字符(用空格替代)(del - delete删除).
+ */
 static void del(void)
 {
     if (x)
@@ -243,6 +346,13 @@ static void del(void)
     }
 }
 
+/**
+ * csi_J - 删除屏幕上与光标位置相关的部分，以屏幕为单位。
+ * csi - 控制序列引导码(ControlSequenceIntroducer).
+ * ANSI 转义序列：'ESC [sJ'(s = 0删除光标到屏幕底端；1删除屏幕开始
+ * 到光标处；2整屏删除)。
+ * 参数：par - 对应上面s.
+ */
 static void csi_J(int par)
 {
     long count __asm__("cx");
@@ -273,6 +383,11 @@ static void csi_J(int par)
             : "cx", "di");
 }
 
+/**
+ * csi_K - 删除行内与光标位置相关的部分，以一行为单位.
+ * ANSI转义字符序列：'ESC [sK'(s = 0删除到行尾；1从开始删除；
+ * 2整行都删除).
+ */
 static void csi_K(int par)
 {
     long count __asm__("cx");
@@ -305,6 +420,12 @@ static void csi_K(int par)
             : "cx", "di");
 }
 
+/**
+ * csi_m - 允许翻译(重显)(允许重新设置字符显示方式，比如加粗、加下划线、
+ * 闪烁、反显等).
+ * ANSI 转义字符序列：'ESC [nm'。n = 0 正常显示；1加粗；4加下划线；
+ * 7反显；27正常显示.
+ */
 void csi_m(void)
 {
     int i;
@@ -330,6 +451,10 @@ void csi_m(void)
         }
 }
 
+/**
+ * set_cursor - 根据设置显示光标.
+ * 根据显示内存光标对应位置pos，设置显示控制器光标的显示位置.
+ */
 static inline void set_cursor(void)
 {
     cli();
@@ -340,6 +465,10 @@ static inline void set_cursor(void)
     sti();
 }
 
+/**
+ * respond - 发送对终端VT100的响应序列.
+ * 将响应序列放入读缓冲队列中.
+ */
 static void respond(struct tty_struct *tty)
 {
     char *p = RESPONSE;
@@ -356,6 +485,9 @@ static void respond(struct tty_struct *tty)
     copy_to_cooked(tty);
 }
 
+/**
+ * insert_char - 在光标处插入一空格字符.
+ */
 static void insert_char(void)
 {
     int i = x;
@@ -371,6 +503,10 @@ static void insert_char(void)
     }
 }
 
+/**
+ * insert_line - 在光标处插入一行(则光标将处在新的空行上).
+ * 将屏幕从光标所在行到屏幕底向下卷动一行.
+ */
 static void insert_line(void)
 {
     int oldtop, oldbottom;
@@ -384,6 +520,9 @@ static void insert_line(void)
     bottom = oldbottom;
 }
 
+/**
+ * delete_char - 删除光标处的一个字符.
+ */
 static void delete_char(void)
 {
     int i;
@@ -403,6 +542,10 @@ static void delete_char(void)
     *p = video_erase_char;
 }
 
+/**
+ * delete_line - 删除光标所在行.
+ * 从光标所在行开始屏幕内容上卷一行.
+ */
 static void delete_line(void)
 {
     int oldtop, oldbottom;
@@ -416,6 +559,11 @@ static void delete_line(void)
     bottom = oldbottom;
 }
 
+/**
+ * csi_at - 在光标处插入nr个字符.
+ * ANSI 转义字符序列：'ESC [n@ '。
+ * 参数nr = 上面n.
+ */
 static void csi_at(unsigned int nr)
 {
     if (nr > video_num_columns)
@@ -427,6 +575,10 @@ static void csi_at(unsigned int nr)
         insert_char();
 }
 
+/**
+ * csi_L - 在光标位置处插入nr行.
+ * ANSI转义字符序列'ESC [nL'.
+ */
 static void csi_L(unsigned int nr)
 {
     if (nr > video_num_lines)
@@ -438,6 +590,10 @@ static void csi_L(unsigned int nr)
         insert_line();
 }
 
+/**
+ * csi_P - 删除光标处的nr个字符.
+ * ANSI转义序列：'ESC [nP'.
+ */
 static void csi_P(unsigned int nr)
 {
     if (nr > video_num_columns)
@@ -449,6 +605,10 @@ static void csi_P(unsigned int nr)
         delete_char();
 }
 
+/**
+ * csi_M - 删除光标处的nr行.
+ * ANSI转义序列：'ESC [nM'.
+ */
 static void csi_M(unsigned int nr)
 {
     if (nr > video_num_lines)
@@ -460,20 +620,32 @@ static void csi_M(unsigned int nr)
         delete_line();
 }
 
+/* 保存的光标列号. */
 static int saved_x = 0;
+/* 保存的光标行号. */
 static int saved_y = 0;
 
+/**
+ * save_cur - 保存当前光标位置.
+ */
 static void save_cur(void)
 {
     saved_x = x;
     saved_y = y;
 }
 
+/**
+ * restore_cur - 恢复保存的光标位置.
+ */
 static void restore_cur(void)
 {
     gotoxy(saved_x, saved_y);
 }
 
+/**
+ * con_write - 控制台写函数.
+ * 从终端对应的tty写缓冲队列中取字符，并显示在屏幕上.
+ */
 void con_write(struct tty_struct *tty)
 {
     int nr;
@@ -699,12 +871,10 @@ void con_write(struct tty_struct *tty)
 /*
  *  void con_init(void);
  *
- * This routine initalizes console interrupts, and does nothing
- * else. If you want the screen to clear, call tty_write with
- * the appropriate escape-sequece.
+ * 这个子程序初始化控制台中断，其它什么都不做。如果你想让屏幕干净的话，就使用
+ * 适当的转义字符序列调用tty_write()函数.
  *
- * Reads the information preserved by setup.s to determine the current display
- * type and sets everything accordingly.
+ * 读取setup.s程序保存的信息，用以确定当前显示器类型，并且设置所有相关参数.
  */
 void con_init(void)
 {
@@ -783,6 +953,10 @@ void con_init(void)
 }
 /* from bsd-net-2: */
 
+/**
+ * sysbeepstop - 停止蜂鸣.
+ * 复位8255A PB端口的位1和位0.
+ */
 void sysbeepstop(void)
 {
     /* disable counter 2 */
@@ -791,16 +965,25 @@ void sysbeepstop(void)
 
 int beepcount = 0;
 
+/**
+ * sysbeep - 开通蜂鸣.
+ * 
+ * 8255A芯片PB端口的位1用作扬声器的开门信号；位0用作8253定时器2的门信号，
+ * 该定时器的输出脉冲送往扬声器，作为扬声器发声的频率。因此要使扬声器蜂鸣，
+ * 需要两步：首先开启PB端口位1和位0(置位)，然后设置定时器发送一定的定时频率即可.
+ */
 static void sysbeep(void)
 {
-    /* enable counter 2 */
+    /* 开启定时器2. */
     outb_p(inb_p(0x61) | 3, 0x61);
-    /* set command for counter 2, 2 byte write */
+
+    /* 送设置定时器2命令. */
     outb_p(0xB6, 0x43);
-    /* send 0x637 for 750 HZ */
+
+    /* 设置频率为750HZ，因此送定时值0x637. */
     outb_p(0x37, 0x42);
     outb(0x06, 0x42);
 
-    /* 1/8 second */
+    /* 蜂鸣时间为1/8秒. */
     beepcount = HZ / 8;
 }
